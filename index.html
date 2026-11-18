@@ -25,7 +25,7 @@
       border-radius: 24px;
       box-shadow: 0 18px 46px rgba(15, 44, 92, 0.14);
       padding: 28px 24px;
-      max-width: 380px;
+      max-width: 390px;
       width: 100%;
     }
     h1 { font-size: 19px; font-weight: 800; margin-bottom: 10px; }
@@ -40,10 +40,29 @@
     }
     .spinner.hidden { display: none; }
     @keyframes spin { to { transform: rotate(360deg); } }
-    p { font-size: 13.5px; color: #4a6382; line-height: 1.45; margin-bottom: 16px; min-height: 40px; }
+    p { font-size: 13.5px; color: #4a6382; line-height: 1.5; margin-bottom: 16px; min-height: 40px; }
+    .url-pill {
+      display: none;
+      margin: 0 auto 14px;
+      padding: 8px 12px;
+      background: #f0f7ff;
+      border: 1px solid #c5dcf7;
+      border-radius: 12px;
+      font-size: 12px;
+      font-weight: 700;
+      color: #1d76db;
+      word-break: break-all;
+    }
+    .actions {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      align-items: center;
+    }
     .btn {
       display: inline-block;
-      padding: 10px 22px;
+      width: 100%;
+      padding: 12px 20px;
       border-radius: 999px;
       background: #1d76db;
       color: #ffffff;
@@ -53,42 +72,70 @@
       cursor: pointer;
       text-decoration: none;
     }
+    .btn-secondary {
+      background: #eef6ff;
+      color: #1d76db;
+      border: 1px solid #c5dcf7;
+    }
     .btn:active { transform: scale(0.98); }
   </style>
 </head>
 <body>
   <div class="card">
-    <h1>&#x1F3F0; Disney PhotoPass Sync</h1>
-    <div class="spinner" id="spinner"></div>
-    <p id="statusMsg">Connecting to your live PC dashboard...</p>
-    <button type="button" class="btn" id="retryBtn" style="display:none;">Try Again</button>
+    <h1 id="cardTitle">&#x1F3F0; Disney PhotoPass Sync</h1>
+    <div class="spinner hidden" id="spinner"></div>
+    <div class="url-pill" id="urlPill">https://rectro800.github.io/disney-sync-link/</div>
+    <p id="statusMsg">Loading...</p>
+    <div class="actions">
+      <button type="button" class="btn" id="continueBtn" style="display:none;">I've Bookmarked It &#x2014; Open Dashboard &#x2192;</button>
+      <button type="button" class="btn" id="retryBtn" style="display:none;">Try Again</button>
+      <button type="button" class="btn btn-secondary" id="pauseBookmarkBtn" style="display:none;">&#x1F4CC; Pause to Bookmark</button>
+    </div>
   </div>
   <script>
     (async () => {
       const OWNER_REPO = 'rectro800/disney-sync-link';
       const TOKEN_KEY = 'disney_sync_token';
+      const BOOKMARKED_KEY = 'disney_sync_bookmarked';
       const MAX_ATTEMPTS = 20;
       const RETRY_DELAY_MS = 3000;
 
+      const titleEl = document.getElementById('cardTitle');
       const statusEl = document.getElementById('statusMsg');
+      const urlPillEl = document.getElementById('urlPill');
+      const continueBtn = document.getElementById('continueBtn');
       const retryBtn = document.getElementById('retryBtn');
+      const pauseBookmarkBtn = document.getElementById('pauseBookmarkBtn');
       const spinnerEl = document.getElementById('spinner');
 
       const params = new URLSearchParams(window.location.search);
+      const wantBookmarkPause = params.get('bookmark') === '1';
       let token = params.get('token') || '';
       if (token) {
         try { localStorage.setItem(TOKEN_KEY, token); } catch (_) {}
       } else {
         try {
           const saved = localStorage.getItem(TOKEN_KEY) || '';
-          if (saved) {
-            token = saved;
-            params.set('token', saved);
-          }
+          if (saved) token = saved;
         } catch (_) {}
       }
-      const queryStr = params.toString();
+
+      // Build clean forward parameters (token preserved, bookmark flag stripped)
+      const forwardParams = new URLSearchParams(window.location.search);
+      forwardParams.delete('bookmark');
+      if (token && !forwardParams.get('token')) {
+        forwardParams.set('token', token);
+      }
+      const queryStr = forwardParams.toString();
       const suffix = (queryStr ? '?' + queryStr : '') + window.location.hash;
+
+      // Clean the address bar to the permanent canonical bookmark URL immediately
+      try {
+        window.history.replaceState(null, '', window.location.pathname);
+      } catch (_) {}
+
+      let alreadyBookmarked = false;
+      try { alreadyBookmarked = localStorage.getItem(BOOKMARKED_KEY) === '1'; } catch (_) {}
 
       async function fetchTunnelInfo() {
         const ts = Date.now();
@@ -158,9 +205,26 @@
       }
 
       let stopped = false;
+
+      function showBookmarkPause() {
+        stopped = true;
+        spinnerEl.classList.add('hidden');
+        titleEl.innerHTML = '&#x1F4CC; Bookmark This Page Now';
+        urlPillEl.style.display = 'block';
+        statusEl.textContent = "Paused on rectro800.github.io/disney-sync-link so it won't redirect while you save it. Tap your browser menu (\u22EE or Share) \u2192 Bookmark or Add to Home screen, then tap Continue below. Future visits will redirect automatically.";
+        continueBtn.style.display = 'inline-block';
+        retryBtn.style.display = 'none';
+        pauseBookmarkBtn.style.display = 'none';
+      }
+
       async function attemptConnect(startAttempt = 1) {
         stopped = false;
+        titleEl.innerHTML = '&#x1F3F0; Disney PhotoPass Sync';
+        urlPillEl.style.display = 'none';
+        continueBtn.style.display = 'none';
+        pauseBookmarkBtn.style.display = 'inline-block';
         spinnerEl.classList.remove('hidden');
+
         for (let attempt = startAttempt; attempt <= MAX_ATTEMPTS && !stopped; attempt++) {
           if (attempt > 1) {
             statusEl.textContent = `Connecting to your PC tunnel... (attempt ${attempt}/${MAX_ATTEMPTS})`;
@@ -170,31 +234,49 @@
           }
 
           const data = await fetchTunnelInfo();
+          if (stopped) return;
+
           if (data && data.url && /^https:\/\//i.test(data.url)) {
             const baseUrl = data.url.replace(/\/+$/, '');
             const alive = await pingTunnel(baseUrl);
+            if (stopped) return;
             if (alive) {
               window.location.replace(baseUrl + suffix);
               return;
             }
           }
 
-          if (attempt < MAX_ATTEMPTS) {
+          if (attempt < MAX_ATTEMPTS && !stopped) {
             await new Promise((r) => setTimeout(r, RETRY_DELAY_MS));
           }
         }
 
+        if (stopped) return;
         spinnerEl.classList.add('hidden');
         statusEl.textContent = 'Your PC dashboard tunnel is currently offline. Turn on your PC and tap Try Again.';
         retryBtn.style.display = 'inline-block';
       }
+
+      continueBtn.addEventListener('click', () => {
+        try { localStorage.setItem(BOOKMARKED_KEY, '1'); } catch (_) {}
+        attemptConnect(1);
+      });
+
+      pauseBookmarkBtn.addEventListener('click', () => {
+        try { localStorage.removeItem(BOOKMARKED_KEY); } catch (_) {}
+        showBookmarkPause();
+      });
 
       retryBtn.addEventListener('click', () => {
         stopped = true;
         setTimeout(() => attemptConnect(1), 50);
       });
 
-      attemptConnect(1);
+      if (wantBookmarkPause || !alreadyBookmarked) {
+        showBookmarkPause();
+      } else {
+        attemptConnect(1);
+      }
     })();
   </script>
 </body>

@@ -4,7 +4,9 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
   <meta name="theme-color" content="#1d76db" />
+  <meta name="mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   <meta name="apple-mobile-web-app-title" content="Disney Sync" />
   <title>Disney PhotoPass Sync</title>
   <link rel="manifest" href="./manifest.json" />
@@ -12,6 +14,11 @@
   <link rel="apple-touch-icon" sizes="192x192" href="./icon-192.png" />
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body {
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+    }
     body {
       min-height: 100dvh;
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, sans-serif;
@@ -94,10 +101,22 @@
       border: 1px solid #c5dcf7;
     }
     .btn:active { transform: scale(0.98); }
+    #dashboardFrame {
+      display: none;
+      position: fixed;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      width: 100dvw;
+      height: 100dvh;
+      border: 0;
+      background: #d5e8fc;
+      z-index: 9999;
+    }
   </style>
 </head>
 <body>
-  <div class="card">
+  <div class="card" id="launcherCard">
     <img class="app-icon" src="./icon-192.png" width="64" height="64" alt="Disney PhotoPass Sync" />
     <h1 id="cardTitle">Disney PhotoPass Sync</h1>
     <div class="spinner hidden" id="spinner"></div>
@@ -110,6 +129,7 @@
       <button type="button" class="btn btn-secondary" id="pauseBookmarkBtn" style="display:none;">&#x1F4CC; Pause to Install / Bookmark</button>
     </div>
   </div>
+  <iframe id="dashboardFrame" title="Disney PhotoPass Sync" allow="web-share; clipboard-write; fullscreen" allowfullscreen></iframe>
   <script>
     if ('serviceWorker' in navigator) {
       navigator.serviceWorker.register('./sw.js', { scope: '/disney-sync-link/' }).catch(() => {});
@@ -122,6 +142,8 @@
       const MAX_ATTEMPTS = 20;
       const RETRY_DELAY_MS = 3000;
 
+      const cardEl = document.getElementById('launcherCard');
+      const frameEl = document.getElementById('dashboardFrame');
       const titleEl = document.getElementById('cardTitle');
       const statusEl = document.getElementById('statusMsg');
       const urlPillEl = document.getElementById('urlPill');
@@ -148,8 +170,6 @@
       if (token && !forwardParams.get('token')) {
         forwardParams.set('token', token);
       }
-      const queryStr = forwardParams.toString();
-      const suffix = (queryStr ? '?' + queryStr : '') + window.location.hash;
 
       try {
         window.history.replaceState(null, '', window.location.pathname);
@@ -258,8 +278,28 @@
 
       let stopped = false;
 
+      function openEmbeddedDashboard(baseUrl) {
+        const embedParams = new URLSearchParams(forwardParams);
+        embedParams.set('embed', '1');
+        const dest = baseUrl + '/?' + embedParams.toString() + window.location.hash;
+
+        statusEl.textContent = 'Opening full-screen dashboard...';
+        let revealed = false;
+        const revealFrame = () => {
+          if (revealed) return;
+          revealed = true;
+          frameEl.style.display = 'block';
+          cardEl.style.display = 'none';
+        };
+        frameEl.addEventListener('load', revealFrame, { once: true });
+        setTimeout(revealFrame, 2500);
+        frameEl.src = dest;
+      }
+
       function showBookmarkPause() {
         stopped = true;
+        frameEl.style.display = 'none';
+        cardEl.style.display = 'block';
         titleEl.dataset.mode = 'pause';
         spinnerEl.classList.add('hidden');
         titleEl.textContent = 'Install or Bookmark This App';
@@ -274,6 +314,8 @@
 
       async function attemptConnect(startAttempt = 1) {
         stopped = false;
+        frameEl.style.display = 'none';
+        cardEl.style.display = 'block';
         titleEl.dataset.mode = 'connect';
         titleEl.textContent = 'Disney PhotoPass Sync';
         urlPillEl.style.display = 'none';
@@ -298,7 +340,7 @@
             const alive = await pingTunnel(baseUrl);
             if (stopped) return;
             if (alive) {
-              window.location.replace(baseUrl + suffix);
+              openEmbeddedDashboard(baseUrl);
               return;
             }
           }
@@ -313,6 +355,16 @@
         statusEl.textContent = 'Your PC dashboard tunnel is currently offline. Turn on your PC and tap Try Again.';
         retryBtn.style.display = 'inline-block';
       }
+
+      window.addEventListener('message', (e) => {
+        if (
+          e.data &&
+          e.data.type === 'disney-tunnel-reconnect' &&
+          /^https:\/\/[^/]+\.trycloudflare\.com$/i.test(e.origin || '')
+        ) {
+          attemptConnect(1);
+        }
+      });
 
       continueBtn.addEventListener('click', () => {
         try { localStorage.setItem(BOOKMARKED_KEY, '1'); } catch (_) {}
